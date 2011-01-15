@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.HashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -112,6 +113,11 @@ public class JsonSerde implements SerDe {
 	private List<TypeInfo> columnTypes;
 
 	/**
+	 * A map from column names to json names.
+	 */
+	private HashMap<String, String> renames;
+
+	/**
 	 * Initialize this SerDe with the system properties and table properties
 	 * 
 	 */
@@ -151,6 +157,18 @@ public class JsonSerde implements SerDe {
 		row = new ArrayList<Object>(numColumns);
 		for (int c = 0; c < numColumns; c++) {
 			row.add(null);
+		}
+
+		// Read rename properties.
+		renames = new HashMap<String, String>();
+		String renameProperty = tblProps
+			.getProperty("rename_columns");
+		if (renameProperty != null) {
+			String[] individualRenames = renameProperty.split(",");
+			for (String rename : individualRenames) {
+				String[] fromTo = rename.split(">");
+				renames.put(fromTo[1], fromTo[0]);
+			}
 		}
 
 		LOG.debug("JsonSerde initialization complete");
@@ -201,6 +219,9 @@ public class JsonSerde implements SerDe {
 		Object value;
 		for (int c = 0; c < numColumns; c++) {
 			colName = columnNames.get(c);
+			if (renames.containsKey(colName)) {
+				colName = renames.get(colName);
+			}
 			TypeInfo ti = columnTypes.get(c);
 
 			try {
