@@ -205,7 +205,9 @@ public class JsonSerde implements SerDe {
 
 			try {
 				// Get type-safe JSON values
-				if (ti.getTypeName().equalsIgnoreCase(
+				if (jObj.isNull(colName)) {
+					value = null;
+				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.DOUBLE_TYPE_NAME)) {
 					value = jObj.getDouble(colName);
 				} else if (ti.getTypeName().equalsIgnoreCase(
