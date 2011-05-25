@@ -252,8 +252,19 @@ public class JsonSerde implements SerDe {
 					// convert numbers to strings if need be
 					value = jObj.getString(colName);
 				} else {
+					
 					// Fall back, just get an object
+				    
 					value = jObj.get(colName);
+					//incase of JSONArray the json_object eval udf is not supported
+					//so we are adding the array to the the JSONOBject containet
+					//And than we can query the array using jeval
+					if (value instanceof org.json.JSONArray) {
+						JSONObject container = new JSONObject();
+						container.put("array", value);
+						value = container.toString();
+						
+					}
 				}
 			} catch (JSONException e) {
 				// If the column cannot be found, just make it a NULL value and
