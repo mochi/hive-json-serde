@@ -82,6 +82,8 @@ import org.json.JSONObject;
  * @author Peter Sankauskas
  */
 public class JsonSerde implements SerDe {
+	private static final String ROW_KEY = "json_value";
+
 	/**
 	 * Apache commons logger
 	 */
@@ -225,8 +227,15 @@ public class JsonSerde implements SerDe {
 			TypeInfo ti = columnTypes.get(c);
 
 			try {
+				/**
+				 * if the col name is ROW_KEY we return the raw string of the json
+				 * This way we don't force the user to declare all the columns ahead
+				 */
+				if (colName.equalsIgnoreCase(ROW_KEY)){
+					value = rowText.toString();
+				}
 				// Get type-safe JSON values
-				if (jObj.isNull(colName)) {
+				else if (jObj.isNull(colName)) {
 					value = null;
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.DOUBLE_TYPE_NAME)) {
@@ -252,9 +261,7 @@ public class JsonSerde implements SerDe {
 					// convert numbers to strings if need be
 					value = jObj.getString(colName);
 				} else {
-					
 					// Fall back, just get an object
-				    
 					value = jObj.get(colName);
 					//incase of JSONArray the json_object eval udf is not supported
 					//so we are adding the array to the the JSONOBject containet
@@ -263,7 +270,6 @@ public class JsonSerde implements SerDe {
 						JSONObject container = new JSONObject();
 						container.put("array", value);
 						value = container.toString();
-						
 					}
 				}
 			} catch (JSONException e) {
