@@ -3,6 +3,7 @@
  */
 package org.apache.hadoop.hive.contrib.serde2;
 
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -12,6 +13,8 @@ import java.util.HashMap;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.contrib.serde2.field.parsers.FieldParsers;
+import org.apache.hadoop.hive.contrib.serde2.field.parsers.IFieldParser;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -76,12 +79,24 @@ import org.json.JSONObject;
  * it will have a NULL value. If the JSON file contains fields that are not
  * columns in the table, they will be ignored and not visible to the table.
  * 
+ * Conduit Additions:
+ * <p>
+ *   The json can be read with all values as string, and the serde will be reposible to return
+ *   the correct type of the value, using the type of the column
+ * </p>
+ * 
+ *<p>
+ *   a specail column name: json_vaue... if you add this column name to your table... it will 
+ *   the entire JSON you have 
+ *</p>
  * 
  * @see <a href="http://code.google.com/p/hive-json-serde/">hive-json-serde on
  *      Google Code</a>
  * @author Peter Sankauskas
  */
 public class JsonSerde implements SerDe {
+	private static final String NULL = "null";
+
 	private static final String ROW_KEY = "json_value";
 
 	/**
@@ -237,26 +252,19 @@ public class JsonSerde implements SerDe {
 				// Get type-safe JSON values
 				else if (jObj.isNull(colName)) {
 					value = null;
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.DOUBLE_TYPE_NAME)) {
-					value = jObj.getDouble(colName);
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.BIGINT_TYPE_NAME)) {
-					value = jObj.getLong(colName);
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.INT_TYPE_NAME)) {
-					value = jObj.getInt(colName);
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.TINYINT_TYPE_NAME)) {
-					value = Byte.valueOf(jObj.getString(colName));
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.FLOAT_TYPE_NAME)) {
-					value = Float.valueOf(jObj.getString(colName));
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.BOOLEAN_TYPE_NAME)) {
-					value = jObj.getBoolean(colName);
-				} else if (ti.getTypeName().equalsIgnoreCase(
-						Constants.STRING_TYPE_NAME)
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.DOUBLE_TYPE_NAME)) {
+					value = getValue(jObj, colName, FieldParsers.DOUBLE_PARSER);
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.BIGINT_TYPE_NAME)) {
+					value = getValue(jObj, colName, FieldParsers.LONG_PARSER);
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.INT_TYPE_NAME)) {					
+					value = getValue(jObj, colName, FieldParsers.INTEGER_PARSER);					
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.TINYINT_TYPE_NAME)) {
+					value = getValue(jObj, colName, FieldParsers.TINYINT_PARSER);
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.FLOAT_TYPE_NAME)) {
+					value = getValue(jObj, colName, FieldParsers.FLOAT_PARSER);
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.BOOLEAN_TYPE_NAME)) {
+					value = getValue(jObj, colName, FieldParsers.BOOLEAN_PARSER);
+				} else if (ti.getTypeName().equalsIgnoreCase(Constants.STRING_TYPE_NAME)
 						&& jObj.get(colName) instanceof java.lang.Number) {
 					// convert numbers to strings if need be
 					value = jObj.getString(colName);
@@ -286,6 +294,20 @@ public class JsonSerde implements SerDe {
 		}
 
 		return row;
+	}
+	private Object getValue(JSONObject jobj, String colName, IFieldParser fparser){
+		Object value = null;
+		try {
+			value = jobj.get(colName);					
+			if (value != null && value instanceof String){
+				String stringValue = (String)value;
+				if (!NULL.equalsIgnoreCase(stringValue))
+					value = fparser.parse(stringValue);
+				else
+					value = null;
+			}												
+		}catch (Exception e){}
+		return value;
 	}
 
 	/**
