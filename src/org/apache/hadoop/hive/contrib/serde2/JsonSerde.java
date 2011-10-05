@@ -279,6 +279,8 @@ public class JsonSerde implements SerDe {
 						container.put("array", value);
 						value = container.toString();
 					}
+					value = value.toString();
+					
 				}
 			} catch (JSONException e) {
 				// If the column cannot be found, just make it a NULL value and
