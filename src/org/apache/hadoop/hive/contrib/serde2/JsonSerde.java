@@ -6,7 +6,9 @@ package org.apache.hadoop.hive.contrib.serde2;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.HashMap;
 
@@ -210,11 +212,16 @@ public class JsonSerde implements SerDe {
 		Object[] retVal = new Object[length];
 		for (int i = 0; i < length; i++) {
 			try {
-			retVal[i] = arr.get(i);
-			if (arr.isNull(i)){
-				retVal[i] = null;
-			}
-			}catch (JSONException je){
+				Object value = arr.get(i);
+				if (value instanceof JSONObject){
+					value = convertJsonMaptoJavaMap((JSONObject) value);
+				}
+				retVal[i] = value;
+				
+				if (arr.isNull(i)) {
+					retVal[i] = null;
+				}
+			} catch (JSONException je) {
 				retVal[i] = je.getMessage();
 			}
 		}
@@ -264,7 +271,6 @@ public class JsonSerde implements SerDe {
 				colName = renames.get(colName);
 			}
 			TypeInfo ti = columnTypes.get(c);
-
 			try {
 				/**
 				 * if the col name is ROW_KEY we return the raw string of the
@@ -305,6 +311,10 @@ public class JsonSerde implements SerDe {
 						&& jObj.get(colName) instanceof JSONArray) {
 					value = convertJsonArrayToJavaArray(jObj
 							.getJSONArray(colName));
+				} else if (ti.getTypeName().startsWith(Constants.MAP_TYPE_NAME)) {
+					
+					value = convertJsonMaptoJavaMap(jObj.getJSONObject(colName));
+
 				} else {
 					// Fall back, just get an object
 					value = jObj.get(colName);
@@ -313,12 +323,13 @@ public class JsonSerde implements SerDe {
 					// so we are adding the array to the the JSONOBject
 					// containet
 					// And than we can query the array using jeval
+					
 					if (value instanceof org.json.JSONArray) {
 						JSONObject container = new JSONObject();
 						container.put("array", value);
 						value = container.toString();
 					}
-
+					
 					value = value.toString();
 
 				}
@@ -336,6 +347,18 @@ public class JsonSerde implements SerDe {
 		}
 
 		return row;
+	}
+
+	private static Map convertJsonMaptoJavaMap(JSONObject jsonObject)
+			throws JSONException {
+		Map<Object, Object> result = new HashMap<Object, Object>();
+		Iterator<String> keys = jsonObject.keys();
+		while (keys.hasNext()) {
+			String key = keys.next();
+			result.put(key, jsonObject.get(key).toString());
+
+		}
+		return result;
 	}
 
 	private Object getValue(JSONObject jobj, String colName,
