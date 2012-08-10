@@ -3,15 +3,20 @@
  */
 package org.apache.hadoop.hive.contrib.serde2;
 
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.HashMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.contrib.serde2.field.parsers.FieldParsers;
+import org.apache.hadoop.hive.contrib.serde2.field.parsers.IFieldParser;
 import org.apache.hadoop.hive.serde.Constants;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -22,6 +27,7 @@ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -76,12 +82,27 @@ import org.json.JSONObject;
  * it will have a NULL value. If the JSON file contains fields that are not
  * columns in the table, they will be ignored and not visible to the table.
  * 
+ * Conduit Additions:
+ * <p>
+ * The json can be read with all values as string, and the serde will be
+ * reposible to return the correct type of the value, using the type of the
+ * column
+ * </p>
+ * 
+ * <p>
+ * a specail column name: json_vaue... if you add this column name to your
+ * table... it will the entire JSON you have
+ * </p>
  * 
  * @see <a href="http://code.google.com/p/hive-json-serde/">hive-json-serde on
  *      Google Code</a>
  * @author Peter Sankauskas
  */
 public class JsonSerde implements SerDe {
+	private static final String NULL = "null";
+
+	private static final String ROW_KEY = "json_value";
+
 	/**
 	 * Apache commons logger
 	 */
@@ -124,54 +145,58 @@ public class JsonSerde implements SerDe {
 	@Override
 	public void initialize(Configuration sysProps, Properties tblProps)
 			throws SerDeException {
-		LOG.debug("Initializing JsonSerde");
+		try {
+			LOG.debug("Initializing JsonSerde");
 
-		// Get the names of the columns for the table this SerDe is being used
-		// with
-		String columnNameProperty = tblProps
-				.getProperty(Constants.LIST_COLUMNS);
-		columnNames = Arrays.asList(columnNameProperty.split(","));
+			// Get the names of the columns for the table this SerDe is being
+			// used
+			// with
+			String columnNameProperty = tblProps
+					.getProperty(Constants.LIST_COLUMNS);
+			columnNames = Arrays.asList(columnNameProperty.split(","));
 
-		// Convert column types from text to TypeInfo objects
-		String columnTypeProperty = tblProps
-				.getProperty(Constants.LIST_COLUMN_TYPES);
-		columnTypes = TypeInfoUtils
-				.getTypeInfosFromTypeString(columnTypeProperty);
-		assert columnNames.size() == columnTypes.size();
-		numColumns = columnNames.size();
+			// Convert column types from text to TypeInfo objects
+			String columnTypeProperty = tblProps
+					.getProperty(Constants.LIST_COLUMN_TYPES);
+			columnTypes = TypeInfoUtils
+					.getTypeInfosFromTypeString(columnTypeProperty);
+			assert columnNames.size() == columnTypes.size();
+			numColumns = columnNames.size();
 
-		// Create ObjectInspectors from the type information for each column
-		List<ObjectInspector> columnOIs = new ArrayList<ObjectInspector>(
-				columnNames.size());
-		ObjectInspector oi;
-		for (int c = 0; c < numColumns; c++) {
-			oi = TypeInfoUtils
-					.getStandardJavaObjectInspectorFromTypeInfo(columnTypes
-							.get(c));
-			columnOIs.add(oi);
-		}
-		rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(
-				columnNames, columnOIs);
-
-		// Create an empty row object to be reused during deserialization
-		row = new ArrayList<Object>(numColumns);
-		for (int c = 0; c < numColumns; c++) {
-			row.add(null);
-		}
-
-		// Read rename properties.
-		renames = new HashMap<String, String>();
-		String renameProperty = tblProps
-			.getProperty("rename_columns");
-		if (renameProperty != null) {
-			String[] individualRenames = renameProperty.split(",");
-			for (String rename : individualRenames) {
-				String[] fromTo = rename.split(">");
-				renames.put(fromTo[1], fromTo[0]);
+			// Create ObjectInspectors from the type information for each column
+			List<ObjectInspector> columnOIs = new ArrayList<ObjectInspector>(
+					columnNames.size());
+			ObjectInspector oi;
+			for (int c = 0; c < numColumns; c++) {
+				oi = TypeInfoUtils
+						.getStandardJavaObjectInspectorFromTypeInfo(columnTypes
+								.get(c));
+				columnOIs.add(oi);
 			}
-		}
+			rowOI = ObjectInspectorFactory.getStandardStructObjectInspector(
+					columnNames, columnOIs);
 
-		LOG.debug("JsonSerde initialization complete");
+			// Create an empty row object to be reused during deserialization
+			row = new ArrayList<Object>(numColumns);
+			for (int c = 0; c < numColumns; c++) {
+				row.add(null);
+			}
+
+			// Read rename properties.
+			renames = new HashMap<String, String>();
+			String renameProperty = tblProps.getProperty("rename_columns");
+			if (renameProperty != null) {
+				String[] individualRenames = renameProperty.split(",");
+				for (String rename : individualRenames) {
+					String[] fromTo = rename.split(">");
+					renames.put(fromTo[1], fromTo[0]);
+				}
+			}
+
+			LOG.debug("JsonSerde initialization complete");
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
 	}
 
 	/**
@@ -180,6 +205,29 @@ public class JsonSerde implements SerDe {
 	@Override
 	public ObjectInspector getObjectInspector() throws SerDeException {
 		return rowOI;
+	}
+
+	private static Object[] convertJsonArrayToJavaArray(JSONArray arr) {
+		int length = arr.length();
+		Object[] retVal = new Object[length];
+		for (int i = 0; i < length; i++) {
+			try {
+				Object value = arr.get(i);
+				if (value instanceof JSONObject){
+					value = convertJsonMaptoJavaMap((JSONObject) value);
+				}
+				retVal[i] = value;
+				
+				if (arr.isNull(i)) {
+					retVal[i] = null;
+				}
+			} catch (JSONException je) {
+				retVal[i] = je.getMessage();
+			}
+		}
+
+		return retVal;
+
 	}
 
 	/**
@@ -223,45 +271,75 @@ public class JsonSerde implements SerDe {
 				colName = renames.get(colName);
 			}
 			TypeInfo ti = columnTypes.get(c);
-
 			try {
+				/**
+				 * if the col name is ROW_KEY we return the raw string of the
+				 * json This way we don't force the user to declare all the
+				 * columns ahead
+				 */
+				if (colName.equalsIgnoreCase(ROW_KEY)) {
+					value = rowText.toString();
+				}
 				// Get type-safe JSON values
-				if (jObj.isNull(colName)) {
+				else if (jObj.isNull(colName)) {
 					value = null;
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.DOUBLE_TYPE_NAME)) {
-					value = jObj.getDouble(colName);
+					value = getValue(jObj, colName, FieldParsers.DOUBLE_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.BIGINT_TYPE_NAME)) {
-					value = jObj.getLong(colName);
+					value = getValue(jObj, colName, FieldParsers.LONG_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.INT_TYPE_NAME)) {
-					value = jObj.getInt(colName);
+					value = getValue(jObj, colName, FieldParsers.INTEGER_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.TINYINT_TYPE_NAME)) {
-					value = Byte.valueOf(jObj.getString(colName));
+					value = getValue(jObj, colName, FieldParsers.TINYINT_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.FLOAT_TYPE_NAME)) {
-					value = Float.valueOf(jObj.getString(colName));
+					value = getValue(jObj, colName, FieldParsers.FLOAT_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.BOOLEAN_TYPE_NAME)) {
-					value = jObj.getBoolean(colName);
+					value = getValue(jObj, colName, FieldParsers.BOOLEAN_PARSER);
 				} else if (ti.getTypeName().equalsIgnoreCase(
 						Constants.STRING_TYPE_NAME)
 						&& jObj.get(colName) instanceof java.lang.Number) {
 					// convert numbers to strings if need be
 					value = jObj.getString(colName);
+				} else if (ti.getTypeName()
+						.startsWith(Constants.LIST_TYPE_NAME)
+						&& jObj.get(colName) instanceof JSONArray) {
+					value = convertJsonArrayToJavaArray(jObj
+							.getJSONArray(colName));
+				} else if (ti.getTypeName().startsWith(Constants.MAP_TYPE_NAME)) {
+					
+					value = convertJsonMaptoJavaMap(jObj.getJSONObject(colName));
+
 				} else {
 					// Fall back, just get an object
 					value = jObj.get(colName);
+					// incase of JSONArray the json_object eval udf is not
+					// supported
+					// so we are adding the array to the the JSONOBject
+					// containet
+					// And than we can query the array using jeval
+					
+					if (value instanceof org.json.JSONArray) {
+						JSONObject container = new JSONObject();
+						container.put("array", value);
+						value = container.toString();
+					}
+					
+					value = value.toString();
+
 				}
 			} catch (JSONException e) {
 				// If the column cannot be found, just make it a NULL value and
 				// skip over it
 				if (LOG.isDebugEnabled()) {
 					LOG.debug("Column '" + colName + "' not found in row: "
-						+ rowText.toString() + " - JSONException: "
-						+ e.getMessage());
+							+ rowText.toString() + " - JSONException: "
+							+ e.getMessage());
 				}
 				value = null;
 			}
@@ -269,6 +347,35 @@ public class JsonSerde implements SerDe {
 		}
 
 		return row;
+	}
+
+	private static Map convertJsonMaptoJavaMap(JSONObject jsonObject)
+			throws JSONException {
+		Map<Object, Object> result = new HashMap<Object, Object>();
+		Iterator<String> keys = jsonObject.keys();
+		while (keys.hasNext()) {
+			String key = keys.next();
+			result.put(key, jsonObject.get(key).toString());
+
+		}
+		return result;
+	}
+
+	private Object getValue(JSONObject jobj, String colName,
+			IFieldParser fparser) {
+		Object value = null;
+		try {
+			value = jobj.get(colName);
+			if (value != null && value instanceof String) {
+				String stringValue = (String) value;
+				if (!NULL.equalsIgnoreCase(stringValue))
+					value = fparser.parse(stringValue);
+				else
+					value = null;
+			}
+		} catch (Exception e) {
+		}
+		return value;
 	}
 
 	/**
